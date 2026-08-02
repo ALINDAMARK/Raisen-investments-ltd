@@ -1,0 +1,182 @@
+{
+  "records": [
+    {
+      "collection": "employees",
+      "id": "91mkoz8lzxe",
+      "data": "{\"id\":\"91mkoz8lzxe\",\"name\":\"John Doe\",\"dept\":\"Production\",\"shift\":\"Day\",\"rate\":500,\"phone\":\"\",\"status\":\"Active\"}",
+      "createdAt": "2026-07-22T22:56:27.960Z",
+      "updatedAt": "2026-07-22T22:56:27.960Z"
+    },
+    {
+      "collection": "products",
+      "id": "76imuawnlrv",
+      "data": "{\"id\":\"76imuawnlrv\",\"name\":\"Ordinary\",\"unitPrice\":0,\"target\":20}",
+      "createdAt": "2026-07-22T22:57:42.910Z",
+      "updatedAt": "2026-07-22T22:57:42.910Z"
+    },
+    {
+      "collection": "products",
+      "id": "md3cs1wnlrv",
+      "data": "{\"id\":\"md3cs1wnlrv\",\"name\":\"Water Bags (Hard)\",\"unitPrice\":0,\"target\":25}",
+      "createdAt": "2026-07-22T22:57:42.910Z",
+      "updatedAt": "2026-07-22T22:57:42.910Z"
+    },
+    {
+      "collection": "settings",
+      "id": "settings",
+      "data": "{\"companyName\":\"Raisen Investments Ltd\",\"companyAddress\":\"Test\",\"companyPhone\":\"+256700000000\",\"companyTin\":\"TIN-TEST\",\"bonusRate\":1000,\"vatRegistered\":false,\"vatRate\":18,\"invoiceCounter\":0,\"deliveryCounter\":0,\"dispatchCounter\":0,\"receiptCounter\":0}",
+      "createdAt": "2026-07-22T23:12:18.293Z",
+      "updatedAt": "2026-07-22T23:12:18.293Z"
+    }
+  ],
+  "authRoles": [
+    {
+      "role": "manager",
+      "passwordHash": "$2a$10$ILDaZdt9rV6ocF5TNHJCIuLqtJtYmlBPkmm9Ph3yuuq.wWVhbTb92",
+      "label": "Manager",
+      "updatedAt": "2026-07-22T22:52:33.326Z"
+    },
+    {
+      "role": "owner",
+      "passwordHash": "$2a$10$FHG9TmcukdytuaUZXjYq8eUf0XhqaOI.ySoYvCf.dWzkjAiaRYgem",
+      "label": "Owner / Director",
+      "updatedAt": "2026-07-22T22:52:33.451Z"
+    },
+    {
+      "role": "supervisor",
+      "passwordHash": "$2a$10$NkqIuXIRqs10VWwWTtX3U.sfgsgfpv1YxXgj7BPRho543/yw2Easi",
+      "label": "Shift Supervisor",
+      "updatedAt": "2026-07-22T22:52:33.583Z"
+    },
+    {
+      "role": "sales",
+      "passwordHash": "$2a$10$x/uW6L2UKxqHp9ejuIVQr.EBZ1zKDAze79CPkXsYDLqkAjDLajCxS",
+      "label": "Sales",
+      "updatedAt": "2026-07-22T22:52:33.714Z"
+    },
+    {
+      "role": "hr",
+      "passwordHash": "$2a$10$mPC1agg5i4q5rrcsQnANSOcdQ90oy/O49b.fr9hHKDZXw.II7aEKO",
+      "label": "HR",
+      "updatedAt": "2026-07-22T22:52:33.838Z"
+    },
+    {
+      "role": "maintenance",
+      "passwordHash": "$2a$10$ikLon3uh8M43GRmT0Y8/I.YTMpkOo5ExsPY0QexHamzj1PTVc7tN2",
+      "label": "Maintenance",
+      "updatedAt": "2026-07-22T22:52:33.962Z"
+    }
+  ],
+  "auditLogs": [
+    {
+      "id": "1784761948570sewwv",
+      "ts": "2026-07-22T23:12:28.570Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "delete-record",
+      "collection": "smoketest20260723",
+      "recordId": "smoke-delete-1",
+      "note": null
+    },
+    {
+      "id": "1784761948555rzgjd",
+      "ts": "2026-07-22T23:12:28.555Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "upsert-record",
+      "collection": "smoketest20260723",
+      "recordId": "smoke-delete-1",
+      "note": null
+    },
+    {
+      "id": "1784761948540cj7rr",
+      "ts": "2026-07-22T23:12:28.540Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "login",
+      "collection": null,
+      "recordId": null,
+      "note": null
+    },
+    {
+      "id": "1784761938341786pu",
+      "ts": "2026-07-22T23:12:18.341Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "delete-record",
+      "collection": "customers",
+      "recordId": "smoke-1",
+      "note": null
+    },
+    {
+      "id": "1784761938324lazrr",
+      "ts": "2026-07-22T23:12:18.324Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "upsert-record",
+      "collection": "customers",
+      "recordId": "smoke-1",
+      "note": null
+    },
+    {
+      "id": "17847619382971f47i",
+      "ts": "2026-07-22T23:12:18.297Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "update-settings",
+      "collection": "settings",
+      "recordId": "settings saved",
+      "note": null
+    },
+    {
+      "id": "1784761938274nv2et",
+      "ts": "2026-07-22T23:12:18.274Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "login",
+      "collection": null,
+      "recordId": null,
+      "note": null
+    },
+    {
+      "id": "1784761918613o53aw",
+      "ts": "2026-07-22T23:11:58.613Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "login",
+      "collection": null,
+      "recordId": null,
+      "note": null
+    },
+    {
+      "id": "17847610629147pge5",
+      "ts": "2026-07-22T22:57:42.914Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "replace-collection",
+      "collection": "products",
+      "recordId": null,
+      "note": "items=2"
+    },
+    {
+      "id": "1784760987965i5glu",
+      "ts": "2026-07-22T22:56:27.965Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "replace-collection",
+      "collection": "employees",
+      "recordId": null,
+      "note": "items=1"
+    },
+    {
+      "id": "178476094554093ei7",
+      "ts": "2026-07-22T22:55:45.540Z",
+      "actorRole": "manager",
+      "actorName": "Boss",
+      "action": "login",
+      "collection": null,
+      "recordId": null,
+      "note": null
+    }
+  ]
+}
