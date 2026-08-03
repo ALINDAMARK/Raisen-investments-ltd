@@ -1,30 +1,25 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   LayoutDashboard, Users, Factory, Wrench, Truck, Receipt, FileText, Package,
-  Wallet, Settings as SettingsIcon, LogOut, Plus, Trash2, Pencil, Printer,
+  Wallet, Settings as SettingsIcon, LogOut, Plus, Trash2, Printer,
   AlertTriangle, CheckCircle2, Boxes, Building2, ClipboardCheck, ArrowLeftRight,
   BarChart3, X, Menu, Download
 } from "lucide-react";
+import { fmt, today, firstOfMonth, uid, inRange, good, targetFor, repaidFor, invoiceTotal, stockBalance } from "./factoryUtils.js";
+import FormField from "./components/FormField.jsx";
+import EntityTable from "./components/EntityTable.jsx";
+import LoginCard from "./components/LoginCard.jsx";
+import SettingsPanel from "./modules/SettingsPanel.jsx";
+import DashboardPanel from "./modules/DashboardPanel.jsx";
+import ReportsPanel from "./modules/ReportsPanel.jsx";
+import SalesPanel from "./modules/SalesPanel.jsx";
+import ProductionPanel from "./modules/ProductionPanel.jsx";
+import MachinesPanel from "./modules/MachinesPanel.jsx";
+import StoresPanel from "./modules/StoresPanel.jsx";
+import LoansPanel from "./modules/LoansPanel.jsx";
+import PayrollPanel from "./modules/PayrollPanel.jsx";
 
-/* ---------------------------------------------------------------- *
- *  helpers
- * ---------------------------------------------------------------- */
-const fmt = (n) => {
-  const v = Number(n);
-  if (!isFinite(v)) return "0";
-  return v.toLocaleString("en-UG", { maximumFractionDigits: 0 });
-};
-const today = () => new Date().toISOString().slice(0, 10);
-const firstOfMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; };
-const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
-export const inRange = (date, start, end) => (!start || date >= start) && (!end || date <= end);
-export const good = (r) => Math.max(0, (Number(r.cartonsMade) || 0) - (Number(r.rejects) || 0));
-export const targetFor = (productName, products) => {
-  const p = (products || []).find((x) => x.name === productName);
-  return p ? Number(p.target) || 0 : 0;
-};
-export const repaidFor = (ref, repayments) => (repayments || []).filter((r) => r.reference === ref).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-export { fmt };
+export { fmt, inRange, good, targetFor, repaidFor } from "./factoryUtils.js";
 
 const DEFAULT_SETTINGS = {
   companyName: "Raisen Investments Ltd", companyAddress: "", companyPhone: "", companyTin: "",
@@ -133,12 +128,18 @@ if (hasWindow && !window.storage) {
  *  storage hooks - shared so the whole factory & the bosses see one
  *  live dataset from wherever they open this
  * ---------------------------------------------------------------- */
-function useCollection(key) {
+function useCollection(key, enabled = true) {
   const [items, setItems] = useState([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (!enabled) {
+      setItems([]);
+      setReady(false);
+      setError(false);
+      return undefined;
+    }
     let alive = true;
     (async () => {
       try {
@@ -151,7 +152,7 @@ function useCollection(key) {
       }
     })();
     return () => { alive = false; };
-  }, [key]);
+  }, [enabled, key]);
 
   const persist = useCallback(async (next) => {
     setItems(next);
@@ -304,22 +305,7 @@ function CrudTable({ title, icon: Icon, schema, collection, role, note }) {
       {editable && (
         <form className="crud-form" onSubmit={submit}>
           {schema.filter((f) => !f.computed).map((f) => (
-            <div className="field" key={f.key}>
-              <label>{f.label}{f.required && <span className="req">*</span>}</label>
-              {f.type === "select" ? (
-                <select value={form[f.key] || ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} required={f.required}>
-                  <option value="">Select…</option>
-                  {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              ) : (
-                <input
-                  type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
-                  value={form[f.key] ?? ""}
-                  onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                  required={f.required}
-                />
-              )}
-            </div>
+            <FormField key={f.key} field={f} value={form[f.key]} onChange={(next) => setForm({ ...form, [f.key]: next })} />
           ))}
           <div className="field field-btns">
             <button className="btn-primary" type="submit">{editingId ? "Update" : <><Plus size={14} /> Add</>}</button>
@@ -327,25 +313,14 @@ function CrudTable({ title, icon: Icon, schema, collection, role, note }) {
           </div>
         </form>
       )}
-      <div className="table-wrap">
-        <table>
-          <thead><tr>{schema.map((f) => <th key={f.key}>{f.label}</th>)}{editable && <th className="th-actions"></th>}</tr></thead>
-          <tbody>
-            {items.length === 0 && <tr><td className="empty" colSpan={schema.length + 1}>No records yet — add the first one above.</td></tr>}
-            {[...items].reverse().map((it) => (
-              <tr key={it.id}>
-                {schema.map((f) => <td key={f.key}>{f.render ? f.render(it) : (f.type === "number" ? fmt(it[f.key]) : it[f.key])}</td>)}
-                {editable && (
-                  <td className="row-actions">
-                    <button onClick={() => startEdit(it)} title="Edit"><Pencil size={14} /></button>
-                    <button onClick={() => remove(it.id)} title="Delete"><Trash2 size={14} /></button>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <EntityTable
+        schema={schema}
+        items={items}
+        editable={editable}
+        onEdit={startEdit}
+        onDelete={(item) => remove(item.id)}
+        emptyMessage="No records yet — add the first one above."
+      />
     </div>
   );
 }
@@ -355,24 +330,34 @@ function CrudTable({ title, icon: Icon, schema, collection, role, note }) {
  * ---------------------------------------------------------------- */
 function Dashboard({ data, settings }) {
   const t = today();
-  const todaysGood = data.production.items.filter((r) => r.date === t).reduce((s, r) => s + good(r), 0);
-  const payFor = (r, emp) => {
-    const g = good(r);
-    const rate = emp ? Number(emp.rate) || 0 : 0;
-    const target = targetFor(r.product, data.products.items);
-    const bonus = g > target ? (g - target) * settings.bonusRate : 0;
-    return g * rate + bonus;
-  };
-  const empByName = Object.fromEntries(data.employees.items.map((e) => [e.name, e]));
-  const todaysWages = data.production.items.filter((r) => r.date === t).reduce((s, r) => s + payFor(r, empByName[r.employee]), 0);
-  const presentToday = data.attendance.items.filter((a) => a.date === t && a.status === "Present").length;
-  const todaysSales = data.sales.items.filter((s) => s.date === t).reduce((s, inv) => s + invoiceTotal(inv), 0);
-  const todaysExpenses = data.expenses.items.filter((e) => e.date === t).reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const cashBalance = data.cashbook.items.reduce((s, c) => s + (c.type === "In" ? Number(c.amount) || 0 : -(Number(c.amount) || 0)), 0);
-  const loansPayableBalance = data.loans.items.filter((l) => l.type === "We Owe (Payable)").reduce((s, l) => s + Math.max(0, (Number(l.principal) || 0) - repaidFor(l.reference, data.loanRepayments.items)), 0);
-  const payablesBalance = data.payables.items.reduce((s, p) => s + Math.max(0, (Number(p.amount) || 0) - (Number(p.amountPaid) || 0)), 0);
-  const lowStock = data.rawMaterials.items.filter((m) => stockBalance(m, data) < (Number(m.minStock) || 0));
-  const machinesDown = data.machines.items.filter((m) => m.status !== "Running");
+  const stats = useMemo(() => {
+    const todaysProduction = data.production.items.filter((r) => r.date === t);
+    const todaysAttendance = data.attendance.items.filter((a) => a.date === t && a.status === "Present");
+    const todaysInvoices = data.sales.items.filter((s) => s.date === t);
+    const payFor = (r, emp) => {
+      const g = good(r);
+      const rate = emp ? Number(emp.rate) || 0 : 0;
+      const target = targetFor(r.product, data.products.items);
+      const bonus = g > target ? (g - target) * settings.bonusRate : 0;
+      return g * rate + bonus;
+    };
+    const empByName = Object.fromEntries(data.employees.items.map((e) => [e.name, e]));
+    const cashBalance = data.cashbook.items.reduce((s, c) => s + (c.type === "In" ? Number(c.amount) || 0 : -(Number(c.amount) || 0)), 0);
+    const loansPayableBalance = data.loans.items.filter((l) => l.type === "We Owe (Payable)").reduce((s, l) => s + Math.max(0, (Number(l.principal) || 0) - repaidFor(l.reference, data.loanRepayments.items)), 0);
+    const payablesBalance = data.payables.items.reduce((s, p) => s + Math.max(0, (Number(p.amount) || 0) - (Number(p.amountPaid) || 0)), 0);
+    return {
+      todaysGood: todaysProduction.reduce((s, r) => s + good(r), 0),
+      todaysWages: todaysProduction.reduce((s, r) => s + payFor(r, empByName[r.employee]), 0),
+      presentToday: todaysAttendance.length,
+      todaysSales: todaysInvoices.reduce((s, inv) => s + invoiceTotal(inv), 0),
+      todaysExpenses: data.expenses.items.filter((e) => e.date === t).reduce((s, e) => s + (Number(e.amount) || 0), 0),
+      cashBalance,
+      loansPayableBalance,
+      payablesBalance,
+      lowStock: data.rawMaterials.items.filter((m) => stockBalance(m, data) < (Number(m.minStock) || 0)),
+      machinesDown: data.machines.items.filter((m) => m.status !== "Running"),
+    };
+  }, [data, settings.bonusRate, t]);
 
   const Card = ({ label, value, accent }) => (
     <div className="stat-card">
@@ -385,30 +370,30 @@ function Dashboard({ data, settings }) {
     <div className="panel">
       <div className="panel-head"><LayoutDashboard size={19} /><h2>Today's Snapshot — {t}</h2></div>
       <div className="stat-grid">
-        <Card label="Cartons Produced Today" value={fmt(todaysGood)} />
-        <Card label="Wages Today (UGX)" value={fmt(todaysWages)} accent="#1F4E78" />
-        <Card label="Employees Present" value={presentToday} />
-        <Card label="Sales Today (UGX)" value={fmt(todaysSales)} accent="#2E7D32" />
-        <Card label="Expenses Today (UGX)" value={fmt(todaysExpenses)} accent="#B3261E" />
-        <Card label="Cash Balance (UGX)" value={fmt(cashBalance)} accent={cashBalance < 0 ? "#B3261E" : "#2E7D32"} />
-        <Card label="Loans Owed (UGX)" value={fmt(loansPayableBalance)} accent={loansPayableBalance > 0 ? "#B3261E" : "#2E7D32"} />
-        <Card label="Bills Owed to Suppliers (UGX)" value={fmt(payablesBalance)} accent={payablesBalance > 0 ? "#B3261E" : "#2E7D32"} />
+        <Card label="Cartons Produced Today" value={fmt(stats.todaysGood)} />
+        <Card label="Wages Today (UGX)" value={fmt(stats.todaysWages)} accent="#1F4E78" />
+        <Card label="Employees Present" value={stats.presentToday} />
+        <Card label="Sales Today (UGX)" value={fmt(stats.todaysSales)} accent="#2E7D32" />
+        <Card label="Expenses Today (UGX)" value={fmt(stats.todaysExpenses)} accent="#B3261E" />
+        <Card label="Cash Balance (UGX)" value={fmt(stats.cashBalance)} accent={stats.cashBalance < 0 ? "#B3261E" : "#2E7D32"} />
+        <Card label="Loans Owed (UGX)" value={fmt(stats.loansPayableBalance)} accent={stats.loansPayableBalance > 0 ? "#B3261E" : "#2E7D32"} />
+        <Card label="Bills Owed to Suppliers (UGX)" value={fmt(stats.payablesBalance)} accent={stats.payablesBalance > 0 ? "#B3261E" : "#2E7D32"} />
       </div>
 
       <div className="dash-alerts">
-        {lowStock.length > 0 && (
+        {stats.lowStock.length > 0 && (
           <div className="alert alert-warn">
             <AlertTriangle size={16} />
-            <span><b>{lowStock.length}</b> raw material{lowStock.length > 1 ? "s" : ""} below reorder level: {lowStock.map((m) => m.name).join(", ")}</span>
+            <span><b>{stats.lowStock.length}</b> raw material{stats.lowStock.length > 1 ? "s" : ""} below reorder level: {stats.lowStock.map((m) => m.name).join(", ")}</span>
           </div>
         )}
-        {machinesDown.length > 0 && (
+        {stats.machinesDown.length > 0 && (
           <div className="alert alert-warn">
             <Wrench size={16} />
-            <span><b>{machinesDown.length}</b> machine{machinesDown.length > 1 ? "s" : ""} not running: {machinesDown.map((m) => m.name).join(", ")}</span>
+            <span><b>{stats.machinesDown.length}</b> machine{stats.machinesDown.length > 1 ? "s" : ""} not running: {stats.machinesDown.map((m) => m.name).join(", ")}</span>
           </div>
         )}
-        {lowStock.length === 0 && machinesDown.length === 0 && (
+        {stats.lowStock.length === 0 && stats.machinesDown.length === 0 && (
           <div className="alert alert-ok"><CheckCircle2 size={16} /><span>Stock levels and machines all look normal.</span></div>
         )}
       </div>
@@ -460,82 +445,6 @@ function Production({ data, settings, role }) {
 }
 
 /* ---------------------------------------------------------------- *
- *  Payroll
- * ---------------------------------------------------------------- */
-function Payroll({ data, settings, role }) {
-  const [start, setStart] = useState(firstOfMonth());
-  const [end, setEnd] = useState(today());
-  const editable = canEdit(role);
-
-  const rows = data.employees.items.map((emp) => {
-    const recs = data.production.items.filter((r) => r.employee === emp.name && inRange(r.date, start, end));
-    const dayRecs = recs.filter((r) => r.shift === "Day");
-    const nightRecs = recs.filter((r) => r.shift === "Night");
-    const payFor = (r) => {
-      const g = good(r);
-      const base = g * (Number(emp.rate) || 0);
-      const target = targetFor(r.product, data.products.items);
-      const bonus = g > target ? (g - target) * settings.bonusRate : 0;
-      return base + bonus;
-    };
-    const cartonsDay = dayRecs.reduce((s, r) => s + good(r), 0);
-    const cartonsNight = nightRecs.reduce((s, r) => s + good(r), 0);
-    const payDay = dayRecs.reduce((s, r) => s + payFor(r), 0);
-    const payNight = nightRecs.reduce((s, r) => s + payFor(r), 0);
-    const totalGross = payDay + payNight;
-    const advRec = data.advances.items.find((a) => a.employee === emp.name && a.start === start && a.end === end);
-    const advance = advRec ? Number(advRec.amount) || 0 : 0;
-    return { emp, cartonsDay, cartonsNight, payDay, payNight, totalGross, advance, advRec, net: totalGross - advance };
-  });
-
-  const setAdvance = (row, val) => {
-    const amount = Number(val) || 0;
-    if (row.advRec) data.advances.update(row.advRec.id, { amount });
-    else data.advances.add({ employee: row.emp.name, start, end, amount });
-  };
-
-  const totals = rows.reduce((s, r) => ({ gross: s.gross + r.totalGross, adv: s.adv + r.advance, net: s.net + r.net }), { gross: 0, adv: 0, net: 0 });
-
-  return (
-    <div className="panel">
-      <div className="panel-head"><Wallet size={19} /><h2>Payroll Summary</h2></div>
-      <div className="period-row">
-        <label>Period Start <input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></label>
-        <label>Period End <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Employee</th><th>Dept</th><th>Cartons (Day)</th><th>Cartons (Night)</th>
-              <th>Pay Day</th><th>Pay Night</th><th>Total Gross</th><th>Advance</th><th>Net Pay</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && <tr><td className="empty" colSpan={9}>Add employees first.</td></tr>}
-            {rows.map((r) => (
-              <tr key={r.emp.id}>
-                <td>{r.emp.name}</td><td>{r.emp.dept}</td>
-                <td>{fmt(r.cartonsDay)}</td><td>{fmt(r.cartonsNight)}</td>
-                <td>{fmt(r.payDay)}</td><td>{fmt(r.payNight)}</td>
-                <td><b>{fmt(r.totalGross)}</b></td>
-                <td>{editable ? <input className="cell-input" type="number" value={r.advance || ""} onChange={(e) => setAdvance(r, e.target.value)} /> : fmt(r.advance)}</td>
-                <td><b>{fmt(r.net)}</b></td>
-              </tr>
-            ))}
-          </tbody>
-          {rows.length > 0 && (
-            <tfoot>
-              <tr><td colSpan={6}><b>Totals</b></td><td><b>{fmt(totals.gross)}</b></td><td><b>{fmt(totals.adv)}</b></td><td><b>{fmt(totals.net)}</b></td></tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- *
  *  Machines & Maintenance
  * ---------------------------------------------------------------- */
 function MachinesMaintenance({ data, role }) {
@@ -566,15 +475,6 @@ function MachinesMaintenance({ data, role }) {
         : <CrudTable title="Maintenance Log" icon={Wrench} schema={logSchema} collection={data.maintenance} role={role} />}
     </div>
   );
-}
-
-/* ---------------------------------------------------------------- *
- *  Stores: Raw Materials, GRN, Material Issue
- * ---------------------------------------------------------------- */
-function stockBalance(material, data) {
-  const received = data.grn.items.filter((g) => g.material === material.name).reduce((s, g) => s + (Number(g.qty) || 0), 0);
-  const issued = data.materialIssue.items.filter((m) => m.material === material.name).reduce((s, m) => s + (Number(m.qty) || 0), 0);
-  return (Number(material.opening) || 0) + received - issued;
 }
 
 function Stores({ data, role }) {
@@ -663,15 +563,6 @@ function Loans({ data, role }) {
         : <CrudTable title="Loan Repayments" icon={Wallet} schema={repaySchema} collection={data.loanRepayments} role={role} />}
     </div>
   );
-}
-
-/* ---------------------------------------------------------------- *
- *  Sales / Invoicing + printable documents
- * ---------------------------------------------------------------- */
-function invoiceTotal(inv) {
-  const sub = (inv.items || []).reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0), 0);
-  const vat = inv.vatAmount || 0;
-  return sub + vat;
 }
 
 function DocHeader({ settings, docType, docNo, date }) {
@@ -781,14 +672,9 @@ function Sales({ data, settings, settingsStore, role }) {
 
       {editable && (
         <form className="crud-form" onSubmit={saveInvoice} style={{ flexWrap: "wrap" }}>
-          <div className="field"><label>Customer *</label>
-            <select value={customer} onChange={(e) => setCustomer(e.target.value)} required>
-              <option value="">Select…</option>
-              {data.customers.items.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
-          </div>
-          <div className="field"><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-          <div className="field"><label>Amount Paid Now</label><input type="number" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} /></div>
+          <FormField field={{ label: "Customer", type: "select", required: true, options: data.customers.items.map((c) => c.name) }} value={customer} onChange={setCustomer} />
+          <FormField field={{ label: "Date", type: "date" }} value={date} onChange={setDate} />
+          <FormField field={{ label: "Amount Paid Now", type: "number" }} value={amountPaid} onChange={setAmountPaid} />
         </form>
       )}
 
@@ -890,36 +776,22 @@ function DocumentModule({ title, icon, docType, prefix, counterField, fields, da
       {editable && (
         <form className="crud-form" onSubmit={save}>
           {fields.map((f) => (
-            <div className="field" key={f.key}>
-              <label>{f.label}{f.required && <span className="req">*</span>}</label>
-              {f.type === "select" ? (
-                <select value={form[f.key] || ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} required={f.required}>
-                  <option value="">Select…</option>
-                  {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              ) : (
-                <input type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"} value={form[f.key] ?? ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} required={f.required} />
-              )}
-            </div>
+            <FormField key={f.key} field={f} value={form[f.key]} onChange={(next) => setForm({ ...form, [f.key]: next })} />
           ))}
           <div className="field field-btns"><button className="btn-primary" type="submit"><Plus size={14} /> Save</button></div>
         </form>
       )}
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>No.</th>{fields.map((f) => <th key={f.key}>{f.label}</th>)}<th></th></tr></thead>
-          <tbody>
-            {collection.items.length === 0 && <tr><td className="empty" colSpan={fields.length + 2}>None recorded yet.</td></tr>}
-            {[...collection.items].reverse().map((it) => (
-              <tr key={it.id}>
-                <td><b>{it.docNo}</b></td>
-                {fields.map((f) => <td key={f.key}>{f.type === "number" ? fmt(it[f.key]) : it[f.key]}</td>)}
-                <td><button onClick={() => setViewDoc(it)}><Printer size={14} /></button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <EntityTable
+        schema={[{ key: 'docNo', label: 'No.' }, ...fields]}
+        items={collection.items}
+        editable={false}
+        rowAction={(item) => <button onClick={() => setViewDoc(item)}><Printer size={14} /></button>}
+        emptyMessage="None recorded yet."
+        renderCell={(item, field) => {
+          if (field.key === 'docNo') return <b>{item.docNo}</b>;
+          return field.type === 'number' ? fmt(item[field.key]) : item[field.key];
+        }}
+      />
       {viewDoc && (
         <PrintModal onClose={() => setViewDoc(null)} filename={viewDoc.docNo}>
           <DocHeader settings={settings} docType={docType} docNo={viewDoc.docNo} date={viewDoc.date} />
@@ -982,94 +854,21 @@ function Reports({ data, settings }) {
 }
 
 /* ---------------------------------------------------------------- *
- *  Settings
- * ---------------------------------------------------------------- */
-function SettingsPanel({ settings, settingsStore, role }) {
-  const [form, setForm] = useState(settings);
-  useEffect(() => setForm(settings), [settings]);
-  const editable = canEdit(role);
-  const save = (e) => { e.preventDefault(); settingsStore.save({ ...form, bonusRate: Number(form.bonusRate), vatRate: Number(form.vatRate) }); };
-
-  return (
-    <div className="panel">
-      <div className="panel-head"><SettingsIcon size={19} /><h2>Settings</h2></div>
-      <form className="settings-form" onSubmit={save}>
-        <fieldset disabled={!editable}>
-          <h3>Company details (used on printed documents)</h3>
-          <div className="field"><label>Company Name</label><input value={form.companyName} onChange={(e) => setForm({ ...form, companyName: e.target.value })} /></div>
-          <div className="field"><label>Address</label><input value={form.companyAddress} onChange={(e) => setForm({ ...form, companyAddress: e.target.value })} /></div>
-          <div className="field"><label>Phone</label><input value={form.companyPhone} onChange={(e) => setForm({ ...form, companyPhone: e.target.value })} /></div>
-          <div className="field"><label>TIN (Tax ID)</label><input value={form.companyTin} onChange={(e) => setForm({ ...form, companyTin: e.target.value })} /></div>
-
-          <h3>Golden offer (bonus scheme)</h3>
-          <p className="hint" style={{ marginTop: -4 }}>Each product has its own carton target — set it on the <b>Products</b> page (e.g. Ordinary = 20/shift, Waterproof = 25/shift). This rate applies to every product's extra cartons.</p>
-          <div className="field"><label>Bonus per Extra Carton (UGX)</label><input type="number" value={form.bonusRate} onChange={(e) => setForm({ ...form, bonusRate: e.target.value })} /></div>
-
-          <h3>Tax / VAT</h3>
-          <div className="field field-checkbox">
-            <label><input type="checkbox" checked={form.vatRegistered} onChange={(e) => setForm({ ...form, vatRegistered: e.target.checked })} /> VAT registered</label>
-          </div>
-          <div className="field"><label>VAT Rate (%)</label><input type="number" value={form.vatRate} onChange={(e) => setForm({ ...form, vatRate: e.target.value })} /></div>
-
-          <button className="btn-primary" type="submit">Save Settings</button>
-        </fieldset>
-      </form>
-      {!editable && <p className="hint">Owner view is read-only. Ask the Manager to change settings.</p>}
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- *
- *  Login
- * ---------------------------------------------------------------- */
-function Login({ onLogin }) {
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setError("");
-    try {
-      const result = await window.factoryAuth.login({ name, role, password });
-      onLogin(result.user);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
-    }
-  };
-
-  return (
-    <div className="login-screen">
-      <div className="login-card">
-        <div className="login-brand">FACTORY<span>OS</span></div>
-        <p className="login-sub">Polythene Bag Factory — Management System</p>
-        <form onSubmit={submit}>
-          <div className="field"><label htmlFor="login-name">Your Name</label><input id="login-name" value={name} onChange={(e) => setName(e.target.value)} required /></div>
-          <div className="field"><label>Your Role</label>
-            <select id="login-role" value={role} onChange={(e) => setRole(e.target.value)} required>
-              <option value="">Select…</option>
-              {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-            </select>
-          </div>
-          <div className="field"><label htmlFor="login-password">Password</label><input id="login-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></div>
-          <button className="btn-primary btn-full" type="submit">Enter</button>
-        </form>
-        {error && <p className="login-error">{error}</p>}
-        <p className="login-note">Everyone who opens this link and enters shares the same live data — perfect for the factory floor and the head office alike.</p>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- *
  *  App shell
  * ---------------------------------------------------------------- */
 export default function FactoryOS() {
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
-  const [tab, setTab] = useState("dashboard");
-  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth > 880) {
+        document.body.classList.remove("workspace-nav-open");
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -1087,32 +886,67 @@ export default function FactoryOS() {
     })();
     return () => { alive = false; };
   }, []);
+  if (booting) {
+    return (
+      <Shell>
+        <div className="login-screen">
+          <div className="login-card">
+            <div className="login-brand">FACTORY<span>OS</span></div>
+            <p className="login-sub">Loading secure session…</p>
+          </div>
+        </div>
+      </Shell>
+    );
+  }
 
+  if (!user) return <Shell><LoginCard roles={ROLES} onLogin={setUser} /></Shell>;
+
+  return <Workspace user={user} onLogout={() => setUser(null)} />;
+}
+
+function Workspace({ user, onLogout }) {
+  const [tab, setTab] = useState("dashboard");
+  const [navOpen, setNavOpen] = useState(false);
+  const tabs = allowedTabs(user.role);
+  const activeTab = tabs.includes(tab) ? tab : tabs[0];
   const settingsStore = useSettingsStore();
   const data = {
-    employees: useCollection("employees"),
-    attendance: useCollection("attendance"),
-    production: useCollection("production"),
-    advances: useCollection("advances"),
-    machines: useCollection("machines"),
-    maintenance: useCollection("maintenance"),
-    rawMaterials: useCollection("rawMaterials"),
-    grn: useCollection("grn"),
-    materialIssue: useCollection("materialIssue"),
-    customers: useCollection("customers"),
-    suppliers: useCollection("suppliers"),
-    products: useCollection("products"),
-    sales: useCollection("sales"),
-    delivery: useCollection("delivery"),
-    dispatch: useCollection("dispatch"),
-    receipts: useCollection("receipts"),
-    expenses: useCollection("expenses"),
-    cashbook: useCollection("cashbook"),
-    loans: useCollection("loans"),
-    loanRepayments: useCollection("loanRepayments"),
-    payables: useCollection("payables"),
-    prepayments: useCollection("prepayments"),
+    employees: useCollection("employees", ["dashboard", "attendance", "production", "payroll", "employees"].includes(activeTab)),
+    attendance: useCollection("attendance", ["dashboard", "attendance"].includes(activeTab)),
+    production: useCollection("production", ["dashboard", "production", "payroll"].includes(activeTab)),
+    advances: useCollection("advances", ["payroll"].includes(activeTab)),
+    machines: useCollection("machines", ["dashboard", "machines", "stores"].includes(activeTab)),
+    maintenance: useCollection("maintenance", ["machines"].includes(activeTab)),
+    rawMaterials: useCollection("rawMaterials", ["dashboard", "stores"].includes(activeTab)),
+    grn: useCollection("grn", ["stores"].includes(activeTab)),
+    materialIssue: useCollection("materialIssue", ["stores"].includes(activeTab)),
+    customers: useCollection("customers", ["dashboard", "customers", "sales", "delivery", "receipts"].includes(activeTab)),
+    suppliers: useCollection("suppliers", ["dashboard", "payables", "suppliers"].includes(activeTab)),
+    products: useCollection("products", ["dashboard", "production", "sales", "products"].includes(activeTab)),
+    sales: useCollection("sales", ["dashboard", "sales", "receipts"].includes(activeTab)),
+    delivery: useCollection("delivery", ["delivery"].includes(activeTab)),
+    dispatch: useCollection("dispatch", ["dispatch"].includes(activeTab)),
+    receipts: useCollection("receipts", ["receipts"].includes(activeTab)),
+    expenses: useCollection("expenses", ["dashboard", "expenses"].includes(activeTab)),
+    cashbook: useCollection("cashbook", ["dashboard", "cashbook"].includes(activeTab)),
+    loans: useCollection("loans", ["dashboard", "loans"].includes(activeTab)),
+    loanRepayments: useCollection("loanRepayments", ["dashboard", "loans"].includes(activeTab)),
+    payables: useCollection("payables", ["dashboard", "payables"].includes(activeTab)),
+    prepayments: useCollection("prepayments", ["prepayments"].includes(activeTab)),
   };
+
+  useEffect(() => {
+    document.body.classList.toggle("workspace-nav-open", navOpen);
+    return () => document.body.classList.remove("workspace-nav-open");
+  }, [navOpen]);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth > 880) setNavOpen(false);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     if (data.products.ready && data.products.items.length === 0) {
@@ -1140,24 +974,25 @@ export default function FactoryOS() {
   ];
   const customerSchema = [
     { key: "name", label: "Customer Name", type: "text", required: true },
-    { key: "phone", label: "Phone", type: "text" },
+    { key: "contact", label: "Contact", type: "text" },
+    { key: "tin", label: "TIN", type: "text" },
     { key: "address", label: "Address", type: "text" },
-    { key: "tin", label: "TIN (optional)", type: "text" },
   ];
   const supplierSchema = [
     { key: "name", label: "Supplier Name", type: "text", required: true },
-    { key: "phone", label: "Phone", type: "text" },
-    { key: "materials", label: "Supplies", type: "text" },
+    { key: "contact", label: "Contact", type: "text" },
+    { key: "tin", label: "TIN", type: "text" },
+    { key: "address", label: "Address", type: "text" },
   ];
   const productSchema = [
-    { key: "name", label: "Product", type: "text", required: true },
-    { key: "unitPrice", label: "Unit Price (UGX)", type: "number", required: true },
-    { key: "target", label: "Bonus Target (cartons/shift)", type: "number", required: true },
+    { key: "name", label: "Product Name", type: "text", required: true },
+    { key: "unitPrice", label: "Unit Price (UGX)", type: "number", default: 0 },
+    { key: "target", label: "Carton Target / Shift", type: "number", default: 0 },
   ];
   const expenseSchema = [
     { key: "date", label: "Date", type: "date", required: true, default: today() },
-    { key: "category", label: "Category", type: "select", options: ["Fuel", "Electricity", "Wages/Salaries", "Repairs & Maintenance", "Transport", "Communication/Airtime", "Rent", "Packaging", "Other"], required: true },
-    { key: "description", label: "Description", type: "text" },
+    { key: "category", label: "Category", type: "text", required: true },
+    { key: "description", label: "Description", type: "text", required: true },
     { key: "amount", label: "Amount (UGX)", type: "number", required: true },
     { key: "paidBy", label: "Paid By", type: "text" },
   ];
@@ -1191,38 +1026,20 @@ export default function FactoryOS() {
     { key: "notes", label: "Notes", type: "text" },
   ];
 
-  if (booting) {
-    return (
-      <Shell>
-        <div className="login-screen">
-          <div className="login-card">
-            <div className="login-brand">FACTORY<span>OS</span></div>
-            <p className="login-sub">Loading secure session…</p>
-          </div>
-        </div>
-      </Shell>
-    );
-  }
-
-  if (!user) return <Shell><Login onLogin={setUser} /></Shell>;
-
-  const tabs = allowedTabs(user.role);
-  const activeTab = tabs.includes(tab) ? tab : tabs[0];
-
   const renderTab = () => {
     switch (activeTab) {
-      case "dashboard": return <Dashboard data={data} settings={settingsStore.settings} />;
-      case "reports": return <Reports data={data} settings={settingsStore.settings} />;
+      case "dashboard": return <DashboardPanel data={data} settings={settingsStore.settings} />;
+      case "reports": return <ReportsPanel data={data} settings={settingsStore.settings} />;
       case "attendance": return <CrudTable title="Attendance" icon={ClipboardCheck} schema={attendanceSchema} collection={data.attendance} role={user.role} />;
-      case "production": return <Production data={data} settings={settingsStore.settings} role={user.role} />;
-      case "payroll": return <Payroll data={data} settings={settingsStore.settings} role={user.role} />;
+      case "production": return <ProductionPanel data={data} settings={settingsStore.settings} role={user.role} />;
+      case "payroll": return <PayrollPanel data={data} settings={settingsStore.settings} role={user.role} />;
       case "employees": return <CrudTable title="Employees" icon={Users} schema={employeeSchema} collection={data.employees} role={user.role} />;
-      case "machines": return <MachinesMaintenance data={data} role={user.role} />;
-      case "stores": return <Stores data={data} role={user.role} />;
+      case "machines": return <MachinesPanel data={data} role={user.role} />;
+      case "stores": return <StoresPanel data={data} role={user.role} />;
       case "customers": return <CrudTable title="Customers" icon={Building2} schema={customerSchema} collection={data.customers} role={user.role} />;
       case "suppliers": return <CrudTable title="Suppliers" icon={Package} schema={supplierSchema} collection={data.suppliers} role={user.role} />;
       case "products": return <CrudTable title="Products" icon={Package} schema={productSchema} collection={data.products} role={user.role} />;
-      case "sales": return <Sales data={data} settings={settingsStore.settings} settingsStore={settingsStore} role={user.role} />;
+      case "sales": return <SalesPanel data={data} settings={settingsStore.settings} settingsStore={settingsStore} editable={canEdit(user.role)} />;
       case "delivery": return (
         <DocumentModule
           title="Delivery Notes" icon={<Truck size={19} />} docType="DELIVERY NOTE" prefix="DN" counterField="deliveryCounter"
@@ -1273,10 +1090,10 @@ export default function FactoryOS() {
         const cashSchemaWithBalance = [...cashSchema, { key: "balance", label: "Running Balance", computed: true, render: (it) => <b>{fmt(balances[it.id] ?? 0)}</b> }];
         return <CrudTable title="Cash Book" icon={Wallet} schema={cashSchemaWithBalance} collection={data.cashbook} role={user.role} />;
       }
-      case "loans": return <Loans data={data} role={user.role} />;
+      case "loans": return <LoansPanel data={data} role={user.role} />;
       case "payables": return <CrudTable title="Bills Owed (Payables)" icon={FileText} schema={payablesSchema} collection={data.payables} role={user.role} note="Supplier bills you haven't fully paid yet — including any that were already outstanding before this system started. Use the same Bill Date as the real paper bill." />;
       case "prepayments": return <CrudTable title="Prepayments" icon={Boxes} schema={prepaymentsSchema} collection={data.prepayments} role={user.role} note="Money already paid out for something not yet used up — e.g. 6 months rent paid in advance. Mark it Fully Used once it's consumed." />;
-      case "settings": return <SettingsPanel settings={settingsStore.settings} settingsStore={settingsStore} role={user.role} />;
+      case "settings": return <SettingsPanel settings={settingsStore.settings} settingsStore={settingsStore} editable={canEdit(user.role)} />;
       default: return null;
     }
   };
@@ -1284,6 +1101,7 @@ export default function FactoryOS() {
   return (
     <Shell>
       <div className={`app-shell ${navOpen ? "nav-open" : ""}`}>
+        {navOpen && <button type="button" aria-label="Close navigation" className="sidebar-backdrop no-print" onClick={() => setNavOpen(false)} />}
         <aside className="sidebar no-print">
           <div className="brand">FACTORY<span>OS</span></div>
           {NAV.map((g) => {
@@ -1332,6 +1150,8 @@ const CSS = `
   color: var(--ink); background: var(--cream); min-height: 100vh;
 }
 .factoryos-root *{ box-sizing: border-box; }
+html{ scroll-behavior:smooth; }
+body.workspace-nav-open{ overflow:hidden; }
 
 .login-screen{ min-height: 100vh; display:flex; align-items:center; justify-content:center; background: linear-gradient(160deg, var(--navy-dark), var(--navy)); padding:20px; }
 .login-card{ background:#fff; border-radius:14px; padding:34px 30px; width:100%; max-width:380px; box-shadow:0 20px 50px rgba(0,0,0,.25); }
@@ -1348,12 +1168,14 @@ const CSS = `
 .nav-group{ margin-bottom:10px; }
 .nav-group-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:#93a8bc; padding:8px 10px 4px; }
 .nav-item{ display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none; color:#dce7f0; padding:9px 10px; border-radius:7px; font-size:13.5px; cursor:pointer; }
+.nav-item, .btn-primary, .btn-ghost, .mobile-toggle, .subtabs button{ touch-action:manipulation; }
 .nav-item:hover{ background:rgba(255,255,255,.08); }
 .nav-item.active{ background:rgba(191,143,0,.18); color:#fff; box-shadow:inset 3px 0 0 var(--gold); }
 .sidebar-foot{ margin-top:auto; padding-top:14px; border-top:1px solid rgba(255,255,255,.12); }
 .user-chip{ font-size:12.5px; padding:8px 10px; color:#fff; display:flex; flex-direction:column; gap:2px; }
 .user-chip span{ font-size:10.5px; color:#9db3c7; }
 .mobile-toggle{ display:none; }
+.sidebar-backdrop{ display:none; }
 
 .content{ flex:1; padding:22px 26px; min-width:0; }
 .panel{ background:#fff; border:1px solid var(--border); border-radius:12px; padding:20px 22px; margin-bottom:20px; }
@@ -1439,10 +1261,34 @@ td{ padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap;
 .doc-sign-row{ display:flex; justify-content:space-between; margin-top:46px; font-size:12.5px; }
 
 @media (max-width: 880px){
-  .sidebar{ position:fixed; left:-260px; z-index:40; transition:left .2s; box-shadow:2px 0 12px rgba(0,0,0,.2); }
-  .nav-open .sidebar{ left:0; }
-  .mobile-toggle{ display:flex; position:fixed; top:14px; left:14px; z-index:41; background:var(--navy); color:#fff; border:none; padding:9px; border-radius:8px; }
-  .content{ padding:64px 14px 24px; }
+  .sidebar{ position:fixed; left:0; z-index:40; transform:translateX(-105%); transition:transform .22s ease; box-shadow:2px 0 16px rgba(0,0,0,.24); width:min(82vw, 320px); }
+  .nav-open .sidebar{ transform:translateX(0); }
+  .sidebar-backdrop{ display:block; position:fixed; inset:0; z-index:39; border:none; background:rgba(15,20,28,.42); backdrop-filter:blur(2px); }
+  .mobile-toggle{ display:flex; position:fixed; top:14px; left:14px; z-index:41; background:var(--navy); color:#fff; border:none; padding:9px; border-radius:8px; box-shadow:0 8px 20px rgba(0,0,0,.18); }
+  .content{ padding:64px 12px 20px; }
+  .panel{ padding:16px 14px; }
+  .crud-form{ padding:12px; }
+  .field{ min-width:0; flex:1 1 180px; }
+  .field input, .field select{ width:100%; }
+  .period-row{ gap:12px; }
+  .print-area{ padding:24px 18px; }
+}
+
+@media (max-width: 640px){
+  .login-card{ padding:28px 20px; border-radius:12px; }
+  .login-brand{ font-size:24px; }
+  .content{ padding-left:10px; padding-right:10px; }
+  .panel-head h2{ font-size:17px; }
+  .stat-grid{ grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); }
+  .stat-value{ font-size:19px; }
+  .subtabs{ overflow-x:auto; padding-bottom:2px; }
+  .subtabs button{ white-space:nowrap; }
+  .line-items{ overflow-x:auto; }
+  .doc-header{ flex-direction:column; align-items:flex-start; gap:10px; }
+  .doc-title-block{ text-align:left; }
+  .doc-sign-row{ flex-direction:column; gap:18px; margin-top:28px; }
+  .print-overlay{ padding:18px 10px; }
+  .print-toolbar{ position:sticky; top:10px; right:auto; left:auto; flex-wrap:wrap; justify-content:flex-end; margin-bottom:10px; }
 }
 
 @media print{

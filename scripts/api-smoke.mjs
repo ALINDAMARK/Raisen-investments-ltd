@@ -116,7 +116,10 @@ try {
   const settingsData = await readJsonResponse(settingsGet);
   assert.equal(JSON.parse(settingsData.value).companyName, 'Smoke Test Factory');
 
-  const collectionName = 'smoke-collection';
+  const unknownCollectionResponse = await fetch(`${baseUrl}/api/store/smoke-collection`, { headers });
+  assert.equal(unknownCollectionResponse.status, 404);
+
+  const collectionName = 'employees';
   const record = { id: 'smoke-record-1', name: 'Smoke Record', amount: 123 };
   const createResponse = await fetch(`${baseUrl}/api/store/${collectionName}`, {
     method: 'POST',

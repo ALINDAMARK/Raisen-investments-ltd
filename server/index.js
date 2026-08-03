@@ -75,6 +75,12 @@ const SPECIAL_WRITE = {
   suppliers: ['manager'],
 };
 
+const KNOWN_COLLECTIONS = new Set([
+  'settings',
+  ...Object.values(WRITE_COLLECTIONS).flat().filter((value) => value && value !== '*'),
+  ...Object.keys(SPECIAL_WRITE),
+]);
+
 const emptyState = () => ({
   records: [],
   authRoles: [],
@@ -176,6 +182,10 @@ function canWrite(role, collection) {
   return allowed.includes('*') || allowed.includes(collection);
 }
 
+function isKnownCollection(key) {
+  return KNOWN_COLLECTIONS.has(key);
+}
+
 function safeParseJson(value) {
   try {
     return { ok: true, value: JSON.parse(value) };
@@ -273,6 +283,7 @@ app.get('/api/auth/me', authRequired, (req, res) => {
 
 app.get('/api/store/:key', authRequired, (req, res) => {
   const { key } = req.params;
+  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
   if (key === 'settings') {
     return res.json({ value: getSettings() });
   }
@@ -281,6 +292,7 @@ app.get('/api/store/:key', authRequired, (req, res) => {
 
 app.put('/api/store/:key', authRequired, (req, res) => {
   const { key } = req.params;
+  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
   const value = String(req.body?.value ?? '');
   if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
   const parsed = validateCollectionValue(key, value);
@@ -299,6 +311,7 @@ app.put('/api/store/:key', authRequired, (req, res) => {
 
 app.post('/api/store/:key', authRequired, (req, res) => {
   const { key } = req.params;
+  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
   if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
   const value = req.body?.value;
   if (!value || typeof value !== 'object') return res.status(400).json({ error: 'Record payload is required' });
@@ -310,6 +323,7 @@ app.post('/api/store/:key', authRequired, (req, res) => {
 
 app.delete('/api/store/:key/:id', authRequired, (req, res) => {
   const { key, id } = req.params;
+  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
   if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
   deleteRecord(key, id);
   audit({ name: req.user.name, role: req.user.role }, 'delete-record', key, id);
