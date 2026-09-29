@@ -230,12 +230,17 @@ app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '2mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: rateLimitMax }));
+
+// CORS: allow requests with no Origin (same-origin, static assets, curl).
+// For disallowed origins, DON'T throw — just omit the CORS header.
+// Throwing caused every disallowed request to fail with a 500.
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     const clean = origin.replace(/\/$/, '');
     if (origins.includes(clean)) return callback(null, true);
-    return callback(new Error('CORS blocked'));
+    console.warn('CORS: origin not in allowlist:', clean);
+    return callback(null, false);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
@@ -372,13 +377,8 @@ app.get('/api/audit', authRequired, async (_req, res, next) => {
  *  static serving — simplified, bulletproof
  * ---------------------------------------------------------------- */
 if (fs.existsSync(distDir)) {
-  // Serve every file in dist/ directly. This handles /assets/*.js, *.css,
-  // favicon, etc. without any special mounting that could crash.
   app.use(express.static(distDir));
 
-  // SPA fallback: only for extension-less routes (e.g. /dashboard).
-  // For anything with an extension that wasn't served above, return 404
-  // instead of the HTML — otherwise <script> tags get HTML and error out.
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
     if (path.extname(req.path)) {
