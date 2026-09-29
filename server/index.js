@@ -21,7 +21,7 @@ const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 const port = Number(process.env.PORT || 4000);
 const origins = (process.env.CORS_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')
-  .split(',').map((value) => value.trim()).filter(Boolean);
+  .split(',').map((value) => value.trim().replace(/\/$/, '')).filter(Boolean);
 const isProduction = process.env.NODE_ENV === 'production';
 const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 300);
 
@@ -225,13 +225,16 @@ function validateCollectionValue(collection, valueText) {
  *  app
  * ---------------------------------------------------------------- */
 const app = express();
+app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '2mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: rateLimitMax }));
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || origins.includes(origin)) return callback(null, true);
+    if (!origin) return callback(null, true);
+    const clean = origin.replace(/\/$/, '');
+    if (origins.includes(clean)) return callback(null, true);
     return callback(new Error('CORS blocked'));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
