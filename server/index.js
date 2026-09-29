@@ -250,6 +250,38 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+// Temporary diagnostic — tells you exactly what's on the filesystem in Railway.
+app.get('/api/debug/files', async (_req, res) => {
+  const out = {
+    cwd: process.cwd(),
+    __dirname,
+    rootDir,
+    distDir,
+    distExists: fs.existsSync(distDir),
+    distFiles: [],
+    assetFiles: [],
+    indexHtmlExists: false,
+    indexHtmlPreview: null,
+  };
+  try {
+    if (out.distExists) {
+      out.distFiles = fs.readdirSync(distDir);
+      out.indexHtmlExists = fs.existsSync(path.join(distDir, 'index.html'));
+      if (out.indexHtmlExists) {
+        const html = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
+        out.indexHtmlPreview = html.slice(0, 500);
+      }
+      const assetsDir = path.join(distDir, 'assets');
+      if (fs.existsSync(assetsDir)) {
+        out.assetFiles = fs.readdirSync(assetsDir);
+      }
+    }
+  } catch (e) {
+    out.error = e.message;
+  }
+  res.json(out);
+});
+
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
@@ -342,10 +374,26 @@ app.get('/api/audit', authRequired, async (_req, res, next) => {
   } catch (e) { next(e); }
 });
 
+/* ---------------------------------------------------------------- *
+ *  static serving — the important fix
+ * ---------------------------------------------------------------- */
 if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
+  // 1) Assets get their own handler. fallthrough:false means a missing
+  //    /assets/*.js file returns 404 instead of falling into the SPA
+  //    fallback and returning index.html as JavaScript.
+  app.use('/assets', express.static(path.join(distDir, 'assets'), {
+    fallthrough: false,
+    maxAge: '1y',
+    immutable: true,
+  }));
+
+  // 2) Everything else in dist (favicon, manifest, robots.txt)
+  app.use(express.static(distDir, { index: false }));
+
+  // 3) SPA fallback — ONLY for routes with no file extension.
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
+    if (path.extname(req.path)) return next();   // has .js/.css/.png → 404, don't send HTML
     res.sendFile(path.join(distDir, 'index.html'));
   });
 }
@@ -362,6 +410,7 @@ app.use((err, _req, res, _next) => {
     app.listen(port, '0.0.0.0', () => {
       console.log(`FactoryOS API running on http://0.0.0.0:${port}`);
       console.log('Database: Neon Postgres');
+      console.log('Serving static files from:', distDir, '— exists:', fs.existsSync(distDir));
     });
   } catch (e) {
     console.error('Failed to start:', e);
