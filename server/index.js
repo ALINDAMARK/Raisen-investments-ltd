@@ -250,7 +250,6 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-// Temporary diagnostic — tells you exactly what's on the filesystem in Railway.
 app.get('/api/debug/files', async (_req, res) => {
   const out = {
     cwd: process.cwd(),
@@ -261,16 +260,11 @@ app.get('/api/debug/files', async (_req, res) => {
     distFiles: [],
     assetFiles: [],
     indexHtmlExists: false,
-    indexHtmlPreview: null,
   };
   try {
     if (out.distExists) {
       out.distFiles = fs.readdirSync(distDir);
       out.indexHtmlExists = fs.existsSync(path.join(distDir, 'index.html'));
-      if (out.indexHtmlExists) {
-        const html = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
-        out.indexHtmlPreview = html.slice(0, 500);
-      }
       const assetsDir = path.join(distDir, 'assets');
       if (fs.existsSync(assetsDir)) {
         out.assetFiles = fs.readdirSync(assetsDir);
@@ -375,31 +369,27 @@ app.get('/api/audit', authRequired, async (_req, res, next) => {
 });
 
 /* ---------------------------------------------------------------- *
- *  static serving — the important fix
+ *  static serving — simplified, bulletproof
  * ---------------------------------------------------------------- */
 if (fs.existsSync(distDir)) {
-  // 1) Assets get their own handler. fallthrough:false means a missing
-  //    /assets/*.js file returns 404 instead of falling into the SPA
-  //    fallback and returning index.html as JavaScript.
-  app.use('/assets', express.static(path.join(distDir, 'assets'), {
-    fallthrough: false,
-    maxAge: '1y',
-    immutable: true,
-  }));
+  // Serve every file in dist/ directly. This handles /assets/*.js, *.css,
+  // favicon, etc. without any special mounting that could crash.
+  app.use(express.static(distDir));
 
-  // 2) Everything else in dist (favicon, manifest, robots.txt)
-  app.use(express.static(distDir, { index: false }));
-
-  // 3) SPA fallback — ONLY for routes with no file extension.
+  // SPA fallback: only for extension-less routes (e.g. /dashboard).
+  // For anything with an extension that wasn't served above, return 404
+  // instead of the HTML — otherwise <script> tags get HTML and error out.
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
-    if (path.extname(req.path)) return next();   // has .js/.css/.png → 404, don't send HTML
+    if (path.extname(req.path)) {
+      return res.status(404).type('text/plain').send('Not found');
+    }
     res.sendFile(path.join(distDir, 'index.html'));
   });
 }
 
 app.use((err, _req, res, _next) => {
-  console.error(err);
+  console.error('Request error:', err);
   res.status(500).json({ error: err?.message || 'Server error' });
 });
 
@@ -410,7 +400,7 @@ app.use((err, _req, res, _next) => {
     app.listen(port, '0.0.0.0', () => {
       console.log(`FactoryOS API running on http://0.0.0.0:${port}`);
       console.log('Database: Neon Postgres');
-      console.log('Serving static files from:', distDir, '— exists:', fs.existsSync(distDir));
+      console.log('distDir:', distDir, '| exists:', fs.existsSync(distDir));
     });
   } catch (e) {
     console.error('Failed to start:', e);
