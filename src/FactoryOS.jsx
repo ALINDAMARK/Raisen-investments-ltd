@@ -29,7 +29,6 @@ const DEFAULT_SETTINGS = {
 };
 
 const AUTH_TOKEN_KEY = "raisen.auth.token";
-const LOCAL_DATA_PREFIX = "raisen.local.";
 
 const hasWindow = typeof window !== "undefined";
 const storedToken = () => {
@@ -45,7 +44,7 @@ const saveToken = (token) => {
     // ignore localStorage failures
   }
 };
-const localDataKey = (key) => `${LOCAL_DATA_PREFIX}${key}`;
+
 const apiRequest = async (path, options = {}) => {
   const token = storedToken();
   const headers = { ...(options.headers || {}) };
@@ -63,46 +62,7 @@ const apiRequest = async (path, options = {}) => {
   return data;
 };
 
-if (hasWindow && !window.storage) {
-  window.storage = {
-    async get(key) {
-      const localValue = (() => {
-        try { return window.localStorage.getItem(localDataKey(key)); } catch { return null; }
-      })();
-
-      if (storedToken()) {
-        try {
-          const data = await apiRequest(`/api/store/${encodeURIComponent(key)}`);
-          if ((data?.value === null || data?.value === undefined) && localValue) {
-            await apiRequest(`/api/store/${encodeURIComponent(key)}`, {
-              method: "PUT",
-              body: JSON.stringify({ value: localValue }),
-            });
-            return { value: localValue };
-          }
-          return data;
-        } catch {
-          // fall back to local storage if the API is unavailable
-        }
-      }
-
-      return localValue === null ? null : { value: localValue };
-    },
-    async set(key, value) {
-      try {
-        window.localStorage.setItem(localDataKey(key), value);
-      } catch {
-        // ignore localStorage failures
-      }
-      if (storedToken()) {
-        await apiRequest(`/api/store/${encodeURIComponent(key)}`, {
-          method: "PUT",
-          body: JSON.stringify({ value }),
-        });
-      }
-    },
-  };
-
+if (hasWindow && !window.factoryAuth) {
   window.factoryAuth = {
     async login({ name, role, password }) {
       const data = await apiRequest(`/api/auth/login`, {
@@ -125,8 +85,8 @@ if (hasWindow && !window.storage) {
 }
 
 /* ---------------------------------------------------------------- *
- *  storage hooks - shared so the whole factory & the bosses see one
- *  live dataset from wherever they open this
+ *  storage hooks — every collection is backed by the Neon Postgres
+ *  API through /api/store/:key so multiple devices see live data
  * ---------------------------------------------------------------- */
 function useCollection(key, enabled = true) {
   const [items, setItems] = useState([]);
@@ -143,10 +103,16 @@ function useCollection(key, enabled = true) {
     let alive = true;
     (async () => {
       try {
-        const res = await window.storage.get(key, true);
-        if (alive) setItems(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        if (alive) setItems([]);
+        const res = await apiRequest(`/api/store/${encodeURIComponent(key)}`);
+        if (alive) {
+          const parsed = res && res.value ? JSON.parse(res.value) : [];
+          setItems(Array.isArray(parsed) ? parsed : []);
+        }
+      } catch {
+        if (alive) {
+          setItems([]);
+          setError(true);
+        }
       } finally {
         if (alive) setReady(true);
       }
@@ -154,24 +120,70 @@ function useCollection(key, enabled = true) {
     return () => { alive = false; };
   }, [enabled, key]);
 
-  const persist = useCallback(async (next) => {
-    setItems(next);
+  const add = useCallback(async (row) => {
+    const record = { id: uid(), ...row };
+    setItems((prev) => [...prev, record]);
     try {
-      await window.storage.set(key, JSON.stringify(next), true);
+      await apiRequest(`/api/store/${encodeURIComponent(key)}`, {
+        method: "POST",
+        body: JSON.stringify({ value: record }),
+      });
       setError(false);
-    } catch (e) {
+    } catch {
+      setError(true);
+    }
+    return record;
+  }, [key]);
+
+  const update = useCallback(async (id, patch) => {
+    let merged = null;
+    setItems((prev) => prev.map((it) => {
+      if (it.id !== id) return it;
+      merged = { ...it, ...patch };
+      return merged;
+    }));
+    if (!merged) return;
+    try {
+      await apiRequest(`/api/store/${encodeURIComponent(key)}`, {
+        method: "POST",
+        body: JSON.stringify({ value: merged }),
+      });
+      setError(false);
+    } catch {
       setError(true);
     }
   }, [key]);
 
-  const add = useCallback((row) => { const r = { id: uid(), ...row }; persist([...items, r]); return r; }, [items, persist]);
-  const update = useCallback((id, patch) => { persist(items.map((it) => (it.id === id ? { ...it, ...patch } : it))); }, [items, persist]);
-  const remove = useCallback((id) => { persist(items.filter((it) => it.id !== id)); }, [items, persist]);
-  const upsertBy = useCallback((matchFn, row) => {
-    const idx = items.findIndex(matchFn);
-    if (idx === -1) { persist([...items, { id: uid(), ...row }]); }
-    else { persist(items.map((it, i) => (i === idx ? { ...it, ...row } : it))); }
-  }, [items, persist]);
+  const remove = useCallback(async (id) => {
+    setItems((prev) => prev.filter((it) => it.id !== id));
+    try {
+      await apiRequest(`/api/store/${encodeURIComponent(key)}/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      setError(false);
+    } catch {
+      setError(true);
+    }
+  }, [key]);
+
+  const persist = useCallback(async (next) => {
+    setItems(next);
+    try {
+      await apiRequest(`/api/store/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({ value: JSON.stringify(next) }),
+      });
+      setError(false);
+    } catch {
+      setError(true);
+    }
+  }, [key]);
+
+  const upsertBy = useCallback(async (matchFn, row) => {
+    const existing = items.find(matchFn);
+    if (existing) return update(existing.id, row);
+    return add(row);
+  }, [items, add, update]);
 
   return { items, add, update, remove, upsertBy, persist, ready, error };
 }
@@ -179,30 +191,43 @@ function useCollection(key, enabled = true) {
 function useSettingsStore() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [ready, setReady] = useState(false);
+
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const res = await window.storage.get("settings", true);
+        const res = await apiRequest(`/api/store/settings`);
         if (alive) {
           const loaded = res && res.value ? JSON.parse(res.value) : null;
           setSettings(loaded ? { ...DEFAULT_SETTINGS, ...loaded } : DEFAULT_SETTINGS);
         }
-      } catch (e) {
+      } catch {
         if (alive) setSettings(DEFAULT_SETTINGS);
-      } finally { if (alive) setReady(true); }
+      } finally {
+        if (alive) setReady(true);
+      }
     })();
     return () => { alive = false; };
   }, []);
+
   const save = async (next) => {
     setSettings(next);
-    try { await window.storage.set("settings", JSON.stringify(next), true); } catch (e) { /* ignore */ }
+    try {
+      await apiRequest(`/api/store/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ value: JSON.stringify(next) }),
+      });
+    } catch {
+      // ignore
+    }
   };
+
   const bump = async (field) => {
     const next = { ...settings, [field]: (settings[field] || 0) + 1 };
     await save(next);
     return next[field];
   };
+
   return { settings, save, bump, ready };
 }
 
@@ -526,8 +551,7 @@ function Stores({ data, role }) {
 }
 
 /* ---------------------------------------------------------------- *
- *  Loans (money the company owes, or is owed) - carried over from
- *  before this system existed, or taken on afterward
+ *  Loans (money the company owes, or is owed)
  * ---------------------------------------------------------------- */
 function Loans({ data, role }) {
   const [sub, setSub] = useState("loans");

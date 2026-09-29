@@ -1,3 +1,6 @@
+// ===== SET TIMEZONE TO EAT (UTC+3) =====
+process.env.TZ = process.env.TZ || 'Africa/Kampala';
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -8,6 +11,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { pool, initSchema } from './db.js';
 
 dotenv.config();
 
@@ -15,10 +19,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
-const dataDir = path.join(__dirname, 'data');
-const dataFile = process.env.DB_PATH || path.join(dataDir, 'raisen-db.json');
 const port = Number(process.env.PORT || 4000);
-const origins = (process.env.CORS_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173').split(',').map((value) => value.trim()).filter(Boolean);
+const origins = (process.env.CORS_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')
+  .split(',').map((value) => value.trim()).filter(Boolean);
 const isProduction = process.env.NODE_ENV === 'production';
 const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 300);
 
@@ -31,8 +34,6 @@ function requireEnv(name, fallback, label) {
 }
 
 const jwtSecret = requireEnv('JWT_SECRET', 'change-this-secret-before-production', 'JWT secret');
-
-fs.mkdirSync(dataDir, { recursive: true });
 
 const DEFAULT_ROLE_PASSWORDS = {
   manager: requireEnv('MANAGER_PASSWORD', 'Manager@123', 'Manager password'),
@@ -81,82 +82,105 @@ const KNOWN_COLLECTIONS = new Set([
   ...Object.keys(SPECIAL_WRITE),
 ]);
 
-const emptyState = () => ({
-  records: [],
-  authRoles: [],
-  auditLogs: [],
-});
-
-function loadState() {
+/* ---------------------------------------------------------------- *
+ *  Postgres data access
+ * ---------------------------------------------------------------- */
+async function seedAuthRoles() {
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS c FROM auth_roles');
+  if (rows[0].c > 0) return;
+  const client = await pool.connect();
   try {
-    if (!fs.existsSync(dataFile)) return emptyState();
-    const raw = fs.readFileSync(dataFile, 'utf8');
-    if (!raw.trim()) return emptyState();
-    const parsed = JSON.parse(raw);
-    return {
-      records: Array.isArray(parsed.records) ? parsed.records : [],
-      authRoles: Array.isArray(parsed.authRoles) ? parsed.authRoles : [],
-      auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
-    };
-  } catch {
-    return emptyState();
+    await client.query('BEGIN');
+    for (const [role, password] of Object.entries(DEFAULT_ROLE_PASSWORDS)) {
+      await client.query(
+        `INSERT INTO auth_roles (role, password_hash, label)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (role) DO NOTHING`,
+        [role, bcrypt.hashSync(password, 10), ROLE_LABELS[role] || role]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
   }
 }
 
-let state = loadState();
-
-function saveState() {
-  const tempFile = `${dataFile}.tmp`;
-  fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), 'utf8');
-  fs.renameSync(tempFile, dataFile);
+async function audit(actor, action, collection = null, recordId = null, note = null) {
+  await pool.query(
+    `INSERT INTO audit_logs (actor_role, actor_name, action, collection, record_id, note)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [actor.role, actor.name, action, collection, recordId, note]
+  );
+  await pool.query(
+    `DELETE FROM audit_logs
+     WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY ts DESC LIMIT 500)`
+  );
 }
 
-function now() {
-  return new Date().toISOString();
+async function getCollection(collection) {
+  const { rows } = await pool.query(
+    `SELECT data FROM collections WHERE collection = $1 ORDER BY created_at ASC, record_id ASC`,
+    [collection]
+  );
+  return rows.map((r) => r.data);
 }
 
-function seedAuthRoles() {
-  if (state.authRoles.length > 0) return;
-  state.authRoles = Object.entries(DEFAULT_ROLE_PASSWORDS).map(([role, password]) => ({
-    role,
-    passwordHash: bcrypt.hashSync(password, 10),
-    label: ROLE_LABELS[role] || role,
-    updatedAt: now(),
-  }));
-  saveState();
+async function setCollection(collection, items) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM collections WHERE collection = $1', [collection]);
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO collections (collection, record_id, data) VALUES ($1, $2, $3)`,
+        [collection, String(item.id), item]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
-seedAuthRoles();
-
-const app = express();
-app.disable('x-powered-by');
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '1mb' }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: rateLimitMax }));
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || origins.includes(origin)) return callback(null, true);
-    return callback(new Error('CORS blocked'));
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type'],
-}));
-
-function audit(actor, action, collection = null, recordId = null, note = null) {
-  state.auditLogs.unshift({
-    id: String(Date.now()) + Math.random().toString(36).slice(2, 7),
-    ts: now(),
-    actorRole: actor.role,
-    actorName: actor.name,
-    action,
-    collection,
-    recordId,
-    note,
-  });
-  state.auditLogs = state.auditLogs.slice(0, 500);
-  saveState();
+async function getSettings() {
+  const { rows } = await pool.query('SELECT data FROM settings WHERE id = 1');
+  return rows[0]?.data ?? null;
 }
 
+async function setSettings(value) {
+  await pool.query(
+    `INSERT INTO settings (id, data) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [value]
+  );
+}
+
+async function upsertRecord(collection, record) {
+  await pool.query(
+    `INSERT INTO collections (collection, record_id, data)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (collection, record_id)
+     DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [collection, String(record.id), record]
+  );
+}
+
+async function deleteRecord(collection, id) {
+  await pool.query(
+    `DELETE FROM collections WHERE collection = $1 AND record_id = $2`,
+    [collection, String(id)]
+  );
+}
+
+/* ---------------------------------------------------------------- *
+ *  auth helpers
+ * ---------------------------------------------------------------- */
 function signUser(user) {
   return jwt.sign({ sub: user.role, role: user.role, name: user.name }, jwtSecret, { expiresIn: '12h' });
 }
@@ -182,156 +206,137 @@ function canWrite(role, collection) {
   return allowed.includes('*') || allowed.includes(collection);
 }
 
-function isKnownCollection(key) {
-  return KNOWN_COLLECTIONS.has(key);
-}
-
-function safeParseJson(value) {
-  try {
-    return { ok: true, value: JSON.parse(value) };
-  } catch {
-    return { ok: false };
-  }
-}
+const isKnownCollection = (key) => KNOWN_COLLECTIONS.has(key);
 
 function validateCollectionValue(collection, valueText) {
-  const parsed = safeParseJson(valueText);
-  if (!parsed.ok) return { ok: false, error: 'Value must be valid JSON' };
-  if (collection === 'settings' && (typeof parsed.value !== 'object' || parsed.value === null || Array.isArray(parsed.value))) {
-    return { ok: false, error: 'Settings must be a JSON object' };
-  }
-  if (collection !== 'settings' && !Array.isArray(parsed.value)) {
+  let parsed;
+  try { parsed = JSON.parse(valueText); } catch { return { ok: false, error: 'Value must be valid JSON' }; }
+  if (collection === 'settings') {
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return { ok: false, error: 'Settings must be a JSON object' };
+    }
+  } else if (!Array.isArray(parsed)) {
     return { ok: false, error: 'Collection data must be a JSON array' };
   }
-  return { ok: true, value: parsed.value };
+  return { ok: true, value: parsed };
 }
 
-function getCollection(collection) {
-  return state.records.filter((record) => record.collection === collection).map((record) => JSON.parse(record.data));
-}
+/* ---------------------------------------------------------------- *
+ *  app
+ * ---------------------------------------------------------------- */
+const app = express();
+app.disable('x-powered-by');
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '2mb' }));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: rateLimitMax }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || origins.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS blocked'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+}));
 
-function setCollection(collection, items) {
-  const timestamp = now();
-  state.records = state.records.filter((record) => record.collection !== collection);
-  for (const item of items) {
-    state.records.push({
-      collection,
-      id: item.id,
-      data: JSON.stringify(item),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
+app.get('/api/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true, service: 'FactoryOS API', time: new Date().toISOString() });
+  } catch {
+    res.status(500).json({ ok: false, error: 'DB unavailable' });
   }
-  saveState();
-}
-
-function getSettings() {
-  const record = state.records.find((item) => item.collection === 'settings');
-  return record ? record.data : null;
-}
-
-function setSettings(value) {
-  state.records = state.records.filter((record) => record.collection !== 'settings');
-  state.records.push({
-    collection: 'settings',
-    id: 'settings',
-    data: JSON.stringify(value),
-    createdAt: now(),
-    updatedAt: now(),
-  });
-  saveState();
-}
-
-function upsertRecord(collection, record) {
-  state.records = state.records.filter((item) => !(item.collection === collection && item.id === record.id));
-  state.records.push({
-    collection,
-    id: record.id,
-    data: JSON.stringify(record),
-    createdAt: now(),
-    updatedAt: now(),
-  });
-  saveState();
-}
-
-function deleteRecord(collection, id) {
-  state.records = state.records.filter((record) => !(record.collection === collection && record.id === id));
-  saveState();
-}
-
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'FactoryOS API', time: now() });
 });
 
-app.post('/api/auth/login', (req, res) => {
-  const name = String(req.body?.name || '').trim();
-  const role = String(req.body?.role || '').trim();
-  const password = String(req.body?.password || '');
-  if (!name || !role || !password) return res.status(400).json({ error: 'Name, role, and password are required' });
-  const row = state.authRoles.find((item) => item.role === role);
-  if (!row) return res.status(401).json({ error: 'Invalid credentials' });
-  const ok = bcrypt.compareSync(password, row.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-  const user = { name, role, label: row.label };
-  audit(user, 'login');
-  return res.json({ token: signUser(user), user });
+app.post('/api/auth/login', async (req, res, next) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const role = String(req.body?.role || '').trim();
+    const password = String(req.body?.password || '');
+    if (!name || !role || !password) return res.status(400).json({ error: 'Name, role, and password are required' });
+
+    const { rows } = await pool.query('SELECT role, password_hash, label FROM auth_roles WHERE role = $1', [role]);
+    const row = rows[0];
+    if (!row) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!bcrypt.compareSync(password, row.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const user = { name, role, label: row.label };
+    await audit(user, 'login');
+    return res.json({ token: signUser(user), user });
+  } catch (e) { next(e); }
 });
 
 app.get('/api/auth/me', authRequired, (req, res) => {
   res.json({ user: { name: req.user.name, role: req.user.role } });
 });
 
-app.get('/api/store/:key', authRequired, (req, res) => {
-  const { key } = req.params;
-  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
-  if (key === 'settings') {
-    return res.json({ value: getSettings() });
-  }
-  return res.json({ value: JSON.stringify(getCollection(key)) });
+app.get('/api/store/:key', authRequired, async (req, res, next) => {
+  try {
+    const { key } = req.params;
+    if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
+    if (key === 'settings') {
+      const value = await getSettings();
+      return res.json({ value: value ? JSON.stringify(value) : null });
+    }
+    return res.json({ value: JSON.stringify(await getCollection(key)) });
+  } catch (e) { next(e); }
 });
 
-app.put('/api/store/:key', authRequired, (req, res) => {
-  const { key } = req.params;
-  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
-  const value = String(req.body?.value ?? '');
-  if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
-  const parsed = validateCollectionValue(key, value);
-  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+app.put('/api/store/:key', authRequired, async (req, res, next) => {
+  try {
+    const { key } = req.params;
+    if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
+    if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
 
-  if (key === 'settings') {
-    setSettings(parsed.value);
-    audit({ name: req.user.name, role: req.user.role }, 'update-settings', key, 'settings saved');
+    const value = String(req.body?.value ?? '');
+    const parsed = validateCollectionValue(key, value);
+    if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+    if (key === 'settings') {
+      await setSettings(parsed.value);
+      await audit({ name: req.user.name, role: req.user.role }, 'update-settings', key, 'settings', 'settings saved');
+      return res.json({ ok: true });
+    }
+
+    await setCollection(key, parsed.value);
+    await audit({ name: req.user.name, role: req.user.role }, 'replace-collection', key, null, `items=${parsed.value.length}`);
     return res.json({ ok: true });
-  }
-
-  setCollection(key, parsed.value);
-  audit({ name: req.user.name, role: req.user.role }, 'replace-collection', key, null, `items=${parsed.value.length}`);
-  return res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
-app.post('/api/store/:key', authRequired, (req, res) => {
-  const { key } = req.params;
-  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
-  if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
-  const value = req.body?.value;
-  if (!value || typeof value !== 'object') return res.status(400).json({ error: 'Record payload is required' });
-  if (!value.id) return res.status(400).json({ error: 'Record id is required' });
-  upsertRecord(key, value);
-  audit({ name: req.user.name, role: req.user.role }, 'upsert-record', key, value.id);
-  return res.json({ ok: true, value });
+app.post('/api/store/:key', authRequired, async (req, res, next) => {
+  try {
+    const { key } = req.params;
+    if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
+    if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
+    const value = req.body?.value;
+    if (!value || typeof value !== 'object') return res.status(400).json({ error: 'Record payload is required' });
+    if (!value.id) return res.status(400).json({ error: 'Record id is required' });
+    await upsertRecord(key, value);
+    await audit({ name: req.user.name, role: req.user.role }, 'upsert-record', key, String(value.id));
+    return res.json({ ok: true, value });
+  } catch (e) { next(e); }
 });
 
-app.delete('/api/store/:key/:id', authRequired, (req, res) => {
-  const { key, id } = req.params;
-  if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
-  if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
-  deleteRecord(key, id);
-  audit({ name: req.user.name, role: req.user.role }, 'delete-record', key, id);
-  return res.json({ ok: true });
+app.delete('/api/store/:key/:id', authRequired, async (req, res, next) => {
+  try {
+    const { key, id } = req.params;
+    if (!isKnownCollection(key)) return res.status(404).json({ error: 'Unknown collection' });
+    if (!canWrite(req.user.role, key)) return res.status(403).json({ error: 'Not allowed to modify this collection' });
+    await deleteRecord(key, id);
+    await audit({ name: req.user.name, role: req.user.role }, 'delete-record', key, id);
+    return res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
-app.get('/api/audit', authRequired, (_req, res) => {
-  res.json({ items: state.auditLogs.slice(0, 200) });
+app.get('/api/audit', authRequired, async (_req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT ts, actor_role AS "actorRole", actor_name AS "actorName",
+              action, collection, record_id AS "recordId", note
+       FROM audit_logs ORDER BY ts DESC LIMIT 200`
+    );
+    res.json({ items: rows });
+  } catch (e) { next(e); }
 });
 
 if (fs.existsSync(distDir)) {
@@ -343,11 +348,20 @@ if (fs.existsSync(distDir)) {
 }
 
 app.use((err, _req, res, _next) => {
-  const message = err?.message || 'Server error';
-  res.status(500).json({ error: message });
+  console.error(err);
+  res.status(500).json({ error: err?.message || 'Server error' });
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`FactoryOS API running on http://0.0.0.0:${port}`);
-  console.log(`Database: ${dataFile}`);
-});
+(async () => {
+  try {
+    await initSchema();
+    await seedAuthRoles();
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`FactoryOS API running on http://0.0.0.0:${port}`);
+      console.log('Database: Neon Postgres');
+    });
+  } catch (e) {
+    console.error('Failed to start:', e);
+    process.exit(1);
+  }
+})();

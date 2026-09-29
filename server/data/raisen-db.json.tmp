@@ -83,6 +83,16 @@
   ],
   "auditLogs": [
     {
+      "id": "1786402158469y73sj",
+      "ts": "2026-08-10T22:49:18.469Z",
+      "actorRole": "manager",
+      "actorName": "kalosius",
+      "action": "replace-collection",
+      "collection": "products",
+      "recordId": null,
+      "note": "items=2"
+    },
+    {
       "id": "1786402151910or3go",
       "ts": "2026-08-10T22:49:11.910Z",
       "actorRole": "manager",
